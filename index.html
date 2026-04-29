@@ -1630,7 +1630,175 @@ function openPostMatchModal(){
  const html=`<div class="postOverlay" id="post-modal"><div class="postBox"><div class="postHero"><div class="card-title">🏁 Fim de jogo</div><div class="scoreNums" style="font-size:3rem;text-align:left">${home.name} ${live.homeGoals} x ${live.awayGoals} ${away.name}</div><div class="small muted">90 minutos + ${live.added||0} de acréscimos. Confira estatísticas e eventos antes de confirmar o resultado.</div></div>${renderMatchStats(live)}<div class="card"><div class="card-hd"><div class="card-title">🎙 Eventos do jogo</div></div><div class="timeline">${live.events.slice().reverse().map(renderEvent).join('')}</div></div><div class="negGrid3 mt12"><button class="btn bac" onclick="document.getElementById('post-modal').remove();confirmMatchResult()">Confirmar e avançar</button><button class="btn bgh" onclick="document.getElementById('post-modal').remove()">Ver tela da partida</button></div></div></div>`;
  document.body.insertAdjacentHTML('beforeend',html);
 }
+function initSeasonCalendar() {
+  const c = myClub();
+  const divClubs = clubs.filter(x => x.div == c.div && x.id != c.id);
+  const days = ['Sábado', 'Domingo', 'Quarta-feira'];
+  const times = ['16:00', '18:30', '20:00', '21:00'];
+  const calendar = [];
+  let round = 1;
 
+  // Jogos da liga nacional/regional
+  divClubs.forEach(opp => {
+    // Jogo em casa
+    calendar.push({
+      id: `${round}-${c.id}-${opp.id}`,
+      round,
+      opp: opp.id,
+      home: true,
+      comp: c.div,
+      label: labelDiv(c.div),
+      type: 'league',
+      day: pick(days),
+      time: pick(times),
+      status: 'open',
+      dist: distance(c.estado, opp.estado),
+      playable: true
+    });
+    round++;
+
+    // Jogo fora
+    calendar.push({
+      id: `${round}-${opp.id}-${c.id}`,
+      round,
+      opp: opp.id,
+      home: false,
+      comp: c.div,
+      label: labelDiv(c.div),
+      type: 'league',
+      day: pick(days),
+      time: pick(times),
+      status: 'open',
+      dist: distance(c.estado, opp.estado),
+      playable: true
+    });
+    round++;
+  });
+
+  // Determinar vagas internacionais com base na divisão
+  const hasLib = c.div == 'A';
+  const hasSul = c.div == 'A' || c.div == 'B';
+
+  if (hasLib) {
+    const opponents = clubs.filter(x => x.div == 'A' && x.id != c.id).slice(0, 5);
+    opponents.forEach(opp => {
+      calendar.push({
+        id: `LIB-${round}-${opp.id}`,
+        round,
+        opp: opp.id,
+        home: round % 2 == 0,
+        comp: 'LIB',
+        label: 'Libertadores',
+        type: 'international',
+        day: pick(['Terça-feira', 'Quarta-feira']),
+        time: '21:30',
+        status: 'open',
+        dist: distance(c.estado, opp.estado),
+        playable: true
+      });
+      round++;
+    });
+  }
+
+  if (hasSul) {
+    const opponents = clubs.filter(x => x.div == 'A' && x.id != c.id).slice(5, 9);
+    opponents.forEach(opp => {
+      calendar.push({
+        id: `SUL-${round}-${opp.id}`,
+        round,
+        opp: opp.id,
+        home: round % 2 == 0,
+        comp: 'SUL',
+        label: 'Sul-Americana',
+        type: 'international',
+        day: pick(['Terça-feira', 'Quinta-feira']),
+        time: '21:30',
+        status: 'open',
+        dist: distance(c.estado, opp.estado),
+        playable: true
+      });
+      round++;
+    });
+  }
+
+  state.calendar = calendar;
+
+  // Registrar elegibilidade internacional
+  state.intl = {
+    libertadores: hasLib ? [c.id, ...clubs.filter(x => x.div == 'A').slice(0, 5).map(x => x.id)] : [],
+    sulamericana: hasSul ? [c.id, ...clubs.filter(x => x.div == 'A').slice(0, 7).map(x => x.id)] : [],
+    recopa: [],
+    mundial: []
+  };
+}
+
+function currentFixture() {
+  if (!state?.calendar) return null;
+  return state.calendar.find(f => f.status == 'open' && f.playable !== false) || null;
+}
+
+function sameSlotFixtures(fx) {
+  if (!state?.calendar || !fx) return [];
+  return state.calendar.filter(f =>
+    f.id != fx.id &&
+    f.round == fx.round &&
+    f.comp == fx.comp &&
+    f.status == 'done'
+  ).slice(0, 5);
+}
+
+function simulateOtherInternational(comp, results) {
+  const pool = clubs.filter(x => x.div == 'A').slice(0, 8);
+  for (let i = 0; i < pool.length - 1; i += 2) {
+    const a = pool[i], b = pool[i + 1];
+    if (a && b) {
+      const ga = rand(0, 3), gb = rand(0, 3);
+      results.push({ home: a.name, away: b.name, score: `${ga} x ${gb}` });
+    }
+  }
+}
+
+function applyCompetitionBonus(comp, win) {
+  if (!win) return;
+  const c = myClub();
+  const bonus = comp == 'LIB' ? 800000 : comp == 'SUL' ? 500000 : comp == 'MUN' ? 2000000 : comp == 'REC' ? 400000 : comp == 'A' ? 250000 : comp == 'B' ? 120000 : 60000;
+  c.cash += bonus;
+  state.finance.push(['Premiação ' + (comp == 'LIB' ? 'Libertadores' : comp == 'SUL' ? 'Sul-Americana' : labelDiv(comp)), bonus]);
+}
+
+function divMultiplier(c) {
+  return c.div == 'A' ? 2.2 : c.div == 'B' ? 1.4 : c.div == 'C' ? 0.85 : c.div == 'D' ? 0.55 : 0.3;
+}
+
+function internationalMultiplier(c) {
+  if (!state?.intl) return 1.0;
+  if (state.intl.mundial?.includes(c.id)) return 1.5;
+  if (state.intl.libertadores?.includes(c.id)) return 1.25;
+  if (state.intl.sulamericana?.includes(c.id)) return 1.1;
+  return 1.0;
+}
+
+function clubMarketValue(c) {
+  const squad = players.filter(p => p.club == c.id);
+  const squadVal = squad.reduce((a, p) => a + p.value, 0);
+  return Math.round(squadVal * divMultiplier(c) * internationalMultiplier(c));
+}
+
+function evolvePlayerAfterMatch(p, played, highlight) {
+  if (!played) return;
+  if (p.age < 26 && p.ovr < p.pot && highlight && Math.random() < 0.12) p.ovr++;
+  if (p.age > 33 && Math.random() < 0.06) p.ovr = Math.max(p.ovr - 1, 40);
+}
+
+function recalcValues() {
+  players.forEach(p => {
+    const c = club(p.club);
+    if (!c) return;
+    const base = Math.round((p.ovr * p.ovr * p.ovr) * (c.div == 'A' ? 55 : c.div == 'B' ? 28 : c.div == 'C' ? 12 : c.div == 'D' ? 5 : 2));
+    const ageFactor = p.age < 23 ? 1.15 : p.age > 30 ? Math.max(0.6, 1 - (p.age - 30) * 0.06) : 1.0;
+    p.value = Math.round(base * ageFactor);
+  });
+}
 init();
 </script>
 </body>
